@@ -310,6 +310,7 @@ int hvl_InitSubsong( struct hvl_tune *ht, uint32_t nr )
     return 0;
 
   ht->ht_SongNum = nr;
+  ht->ht_ScopeEnabled = 0;
 
   PosNr = 0;
   if( nr ) PosNr = ht->ht_Subsongs[nr-1];
@@ -2006,6 +2007,13 @@ void hvl_mixchunk( struct hvl_tune *ht, uint32_t samples, int8_t *buf1, int8_t *
           j = src[i][pos[i]>>16]*vol[i];
         }
 
+        if( ht->ht_ScopeEnabled )
+        {
+          struct hvl_voice *sv = &ht->ht_Voices[i];
+          sv->vc_ScopeBuf[sv->vc_ScopePos] = (float)j * (1.0f/8192.0f);
+          sv->vc_ScopePos = (sv->vc_ScopePos + 1) & (HVL_SCOPE_SIZE-1);
+        }
+
 //        if( abs( j ) > vu[i] ) vu[i] = abs( j );
 
         a += (j * panl[i]) >> 7;
@@ -2066,4 +2074,36 @@ int hvl_DecodeFrame( struct hvl_tune *ht, int8_t *buf1, int8_t *buf2, int32_t bu
   } while( loops );
 
   return count;
+}
+
+void hvl_set_scope_enabled( struct hvl_tune *ht, int on )
+{
+  if( !ht ) return;
+  if( on && !ht->ht_ScopeEnabled )
+  {
+    int i;
+    for( i=0; i<MAX_CHANNELS; i++ )
+    {
+      memset( ht->ht_Voices[i].vc_ScopeBuf, 0, sizeof( ht->ht_Voices[i].vc_ScopeBuf ) );
+      ht->ht_Voices[i].vc_ScopePos = 0;
+    }
+  }
+  ht->ht_ScopeEnabled = on ? 1 : 0;
+}
+
+uint32_t hvl_get_scope_data( struct hvl_tune *ht, int channel, float *out, uint32_t cap )
+{
+  uint32_t n, k, start;
+  struct hvl_voice *sv;
+
+  if( !ht || !out || !ht->ht_ScopeEnabled || channel < 0 || channel >= ht->ht_Channels )
+    return 0;
+
+  sv = &ht->ht_Voices[channel];
+  n  = cap < HVL_SCOPE_SIZE ? cap : HVL_SCOPE_SIZE;
+  start = (sv->vc_ScopePos + HVL_SCOPE_SIZE - n) & (HVL_SCOPE_SIZE-1);
+  for( k=0; k<n; k++ )
+    out[k] = sv->vc_ScopeBuf[(start+k) & (HVL_SCOPE_SIZE-1)];
+
+  return n;
 }

@@ -1,6 +1,7 @@
 
 // Woohoo!
 #define MAX_CHANNELS 16
+#define HVL_SCOPE_SIZE 2048
 #define Period2Freq(period) ((3546897.f * 65536.f) / (period))
 
 #include <stdint.h>
@@ -156,6 +157,8 @@ struct hvl_voice {
     uint8_t vc_RingWaveform;
     uint8_t vc_RingFixedPeriod;
     int8_t vc_RingVoiceBuffer[0x282 * 4];
+    float vc_ScopeBuf[HVL_SCOPE_SIZE];
+    uint32_t vc_ScopePos;
 };
 
 struct hvl_tune {
@@ -193,10 +196,16 @@ struct hvl_tune {
     int32_t ht_defpanright;
     int32_t ht_mixgain;
     uint8_t ht_Version;
+    int ht_ScopeEnabled;
 };
 
 int hvl_DecodeFrame(struct hvl_tune* ht, int8_t* buf1, int8_t* buf2, int32_t bufmod, int* reached_end);
 void hvl_InitReplayer(void);
+
+// Per-voice scope capture: gate with hvl_set_scope_enabled, then read the most
+// recent samples (newest last) for a voice with hvl_get_scope_data.
+void hvl_set_scope_enabled(struct hvl_tune* ht, int on);
+uint32_t hvl_get_scope_data(struct hvl_tune* ht, int channel, float* out, uint32_t cap);
 int hvl_InitSubsong(struct hvl_tune* ht, uint32_t nr);
 struct hvl_tune* hvl_LoadTuneMemory(uint8_t* buf, int buflen, uint32_t freq, uint32_t defstereo);
 void hvl_FreeTune(struct hvl_tune* ht);

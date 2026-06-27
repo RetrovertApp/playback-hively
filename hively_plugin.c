@@ -279,86 +279,203 @@ static void hively_static_init(const RVService* service_api) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Tracker visualization API
+// Visualization API
+//
+// AHX/HVL is a native random-access tracker: positions in the order list map to
+// per-channel tracks, all decoded up front, so it advertises the Synchronized
+// model with the whole song known. Each position has one track per channel; a
+// "pattern" in the viz model is the current position.
 
-static int hively_get_tracker_info(void* user_data, RVTrackerInfo* info) {
-    struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+#define HIVELY_COLUMN_COUNT 6
 
-    if (data->tune == nullptr) {
-        return -1;
+static void hively_render_note(uint8_t note, char* out, size_t cap) {
+    static const char* names[12]
+        = { "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-" };
+    if (note == 0) {
+        out[0] = '\0';
+        return;
     }
-
-    struct hvl_tune* tune = data->tune;
-
-    // In Hively, positions contain track assignments per channel
-    // num_patterns = number of positions in the order list
-    info->num_patterns = tune->ht_PositionNr;
-    info->num_channels = tune->ht_Channels;
-    info->num_orders = tune->ht_PositionNr;
-    info->num_samples = tune->ht_InstrumentNr;
-    info->current_pattern = (uint16_t)tune->ht_PosNr;
-    info->current_row = (uint16_t)tune->ht_NoteNr;
-    info->current_order = (uint16_t)tune->ht_PosNr;
-    info->rows_per_pattern = tune->ht_TrackLength;
-
-    // Copy song name
-    strncpy(info->song_name, tune->ht_Name, sizeof(info->song_name) - 1);
-    info->song_name[sizeof(info->song_name) - 1] = '\0';
-
-    // Copy instrument names (instruments start from 1)
-    int copy_count = tune->ht_InstrumentNr < 32 ? tune->ht_InstrumentNr : 32;
-    for (int i = 1; i < copy_count; ++i) {
-        strncpy(info->sample_names[i - 1], tune->ht_Instruments[i].ins_Name, sizeof(info->sample_names[0]) - 1);
-        info->sample_names[i - 1][sizeof(info->sample_names[0]) - 1] = '\0';
-    }
-
-    return 0;
+    int n = note - 1;
+    snprintf(out, cap, "%s%d", names[n % 12], n / 12 + 1);
 }
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-static int hively_get_pattern_cell(void* user_data, int pattern, int row, int channel, RVPatternCell* cell) {
+static bool hively_get_structure(void* user_data, RVVizInfo* out) {
     struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
-
-    if (data->tune == nullptr) {
-        return -1;
+    if (data == nullptr || data->tune == nullptr || out == nullptr) {
+        return false;
     }
-
-    struct hvl_tune* tune = data->tune;
-
-    // Bounds check - pattern is actually position index in Hively
-    if (pattern < 0 || pattern >= tune->ht_PositionNr || row < 0 || row >= tune->ht_TrackLength || channel < 0
-        || channel >= tune->ht_Channels) {
-        return -1;
-    }
-
-    // In Hively, each position has a track number for each channel
-    // Look up which track is assigned to this channel at this position
-    uint8_t track_num = tune->ht_Positions[pattern].pos_Track[channel];
-
-    // Get the step from the track
-    struct hvl_step* step = &tune->ht_Tracks[track_num][row];
-
-    cell->note = step->stp_Note;
-    cell->instrument = step->stp_Instrument;
-    cell->volume = 0; // Hively doesn't have a volume column
-    cell->effect = step->stp_FX;
-    cell->effect_param = step->stp_FXParam;
-
-    return 0;
+    out->caps = RVVizCaps_PatternCells | RVVizCaps_Scope | RVVizCaps_WholeSongKnown;
+    out->scroll_mode = RVScrollMode_Synchronized;
+    out->pattern_channel_count = data->tune->ht_Channels;
+    out->scope_channel_count = data->tune->ht_Channels;
+    out->column_count = HIVELY_COLUMN_COUNT;
+    return true;
 }
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+static uint32_t hively_get_columns(void* user_data, RVColumnDesc* out, uint32_t cap) {
+    (void)user_data;
+    static const struct {
+        const char* label;
+        uint8_t width;
+        RVColumnKind kind;
+    } cols[HIVELY_COLUMN_COUNT] = {
+        { "Note", 3, RVColumnKind_Note }, { "Inst", 2, RVColumnKind_Instrument },
+        { "FX", 1, RVColumnKind_Effect }, { "Prm", 2, RVColumnKind_Param },
+        { "FX2", 1, RVColumnKind_Effect }, { "Pr2", 2, RVColumnKind_Param },
+    };
+    uint32_t n = cap < HIVELY_COLUMN_COUNT ? cap : HIVELY_COLUMN_COUNT;
+    for (uint32_t i = 0; i < n; i++) {
+        memset(out[i].label, 0, sizeof(out[i].label));
+        strncpy((char*)out[i].label, cols[i].label, sizeof(out[i].label) - 1);
+        out[i].char_width = cols[i].width;
+        out[i].kind = cols[i].kind;
+    }
+    return n;
+}
 
-static int hively_get_pattern_num_rows(void* user_data, int pattern) {
+static uint32_t hively_fill_channels(struct HivelyReplayerData* data, RVChannelDesc* out, uint32_t cap) {
+    uint32_t count = data->tune->ht_Channels;
+    if (count > cap) {
+        count = cap;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        memset(out[i].name, 0, sizeof(out[i].name));
+        snprintf((char*)out[i].name, sizeof(out[i].name), "Ch %u", i + 1);
+        out[i].scope_width = 1;
+    }
+    return count;
+}
+
+static uint32_t hively_get_pattern_channels(void* user_data, RVChannelDesc* out, uint32_t cap) {
     struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+    if (data == nullptr || data->tune == nullptr) {
+        return 0;
+    }
+    return hively_fill_channels(data, out, cap);
+}
 
-    if (data->tune == nullptr || pattern < 0) {
+static uint32_t hively_get_scope_channels(void* user_data, RVChannelDesc* out, uint32_t cap) {
+    struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+    if (data == nullptr || data->tune == nullptr) {
+        return 0;
+    }
+    return hively_fill_channels(data, out, cap);
+}
+
+static bool hively_get_position(void* user_data, RVTrackerPosition* out) {
+    struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+    if (data == nullptr || data->tune == nullptr || out == nullptr) {
+        return false;
+    }
+    struct hvl_tune* tune = data->tune;
+    out->order = (uint32_t)tune->ht_PosNr;
+    out->pattern = (uint32_t)tune->ht_PosNr;
+    out->row = (uint32_t)tune->ht_NoteNr;
+    out->window_lo = 0;
+    out->window_hi = tune->ht_TrackLength;
+    return true;
+}
+
+static uint32_t hively_get_channel_rows(void* user_data, uint32_t* out, uint32_t cap) {
+    (void)user_data;
+    (void)out;
+    (void)cap;
+    return 0; // Synchronized: window comes from get_position
+}
+
+static uint32_t hively_get_cells(void* user_data, int32_t channel, uint32_t row_lo, uint32_t row_hi, RVPatternCell* out,
+                                 uint32_t cap) {
+    struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+    if (data == nullptr || data->tune == nullptr || out == nullptr) {
+        return 0;
+    }
+    struct hvl_tune* tune = data->tune;
+    uint32_t num_rows = tune->ht_TrackLength;
+    int num_ch = tune->ht_Channels;
+    if (row_hi > num_rows) {
+        row_hi = num_rows;
+    }
+    int pos = tune->ht_PosNr;
+
+    int ch_start = channel < 0 ? 0 : channel;
+    int ch_end = channel < 0 ? num_ch : channel + 1;
+    if (ch_start >= num_ch) {
         return 0;
     }
 
-    // All patterns in Hively have the same length
-    return data->tune->ht_TrackLength;
+    uint32_t written = 0;
+    for (uint32_t row = row_lo; row < row_hi; row++) {
+        for (int ch = ch_start; ch < ch_end; ch++) {
+            uint8_t track = tune->ht_Positions[pos].pos_Track[ch];
+            struct hvl_step* step = &tune->ht_Tracks[track][row];
+            uint32_t raws[HIVELY_COLUMN_COUNT]
+                = { step->stp_Note,   step->stp_Instrument, step->stp_FX,
+                    step->stp_FXParam, step->stp_FXb,       step->stp_FXbParam };
+            for (int c = 0; c < HIVELY_COLUMN_COUNT; c++) {
+                if (written >= cap) {
+                    return written;
+                }
+                RVPatternCell* cell = &out[written++];
+                cell->raw = raws[c];
+                memset(cell->text, 0, sizeof(cell->text));
+                char* txt = (char*)cell->text;
+                switch (c) {
+                    case 0:
+                        hively_render_note(step->stp_Note, txt, sizeof(cell->text));
+                        break;
+                    case 1:
+                        if (step->stp_Instrument) {
+                            snprintf(txt, sizeof(cell->text), "%02X", step->stp_Instrument);
+                        }
+                        break;
+                    case 2:
+                        if (step->stp_FX || step->stp_FXParam) {
+                            snprintf(txt, sizeof(cell->text), "%X", step->stp_FX & 0xF);
+                        }
+                        break;
+                    case 3:
+                        if (step->stp_FX || step->stp_FXParam) {
+                            snprintf(txt, sizeof(cell->text), "%02X", step->stp_FXParam);
+                        }
+                        break;
+                    case 4:
+                        if (step->stp_FXb || step->stp_FXbParam) {
+                            snprintf(txt, sizeof(cell->text), "%X", step->stp_FXb & 0xF);
+                        }
+                        break;
+                    case 5:
+                        if (step->stp_FXb || step->stp_FXbParam) {
+                            snprintf(txt, sizeof(cell->text), "%02X", step->stp_FXbParam);
+                        }
+                        break;
+                }
+            }
+        }
+    }
+    return written;
+}
+
+static void hively_set_scope_enabled(void* user_data, bool on) {
+    struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+    if (data == nullptr || data->tune == nullptr) {
+        return;
+    }
+    hvl_set_scope_enabled(data->tune, on ? 1 : 0);
+}
+
+static uint32_t hively_get_scope_samples(void* user_data, int32_t channel, float* out, uint32_t cap) {
+    struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
+    if (data == nullptr || data->tune == nullptr || out == nullptr) {
+        return 0;
+    }
+    return hvl_get_scope_data(data->tune, channel, out, cap);
+}
+
+static uint32_t hively_get_vu(void* user_data, float* out, uint32_t cap) {
+    (void)user_data;
+    (void)out;
+    (void)cap;
+    return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -380,11 +497,17 @@ static RVPlaybackPlugin g_hively_plugin = {
     hively_metadata,
     hively_static_init,
     NULL, // settings_updated
-
-    // Tracker visualization API
-    hively_get_tracker_info,
-    hively_get_pattern_cell,
-    hively_get_pattern_num_rows,
+    NULL, // static_destroy
+    hively_get_structure,
+    hively_get_columns,
+    hively_get_pattern_channels,
+    hively_get_scope_channels,
+    hively_get_position,
+    hively_get_channel_rows,
+    hively_get_cells,
+    hively_set_scope_enabled,
+    hively_get_scope_samples,
+    hively_get_vu,
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
