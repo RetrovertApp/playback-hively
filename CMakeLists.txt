@@ -13,4 +13,6 @@ add_library(hively_playback SHARED hively_plugin.c hvl_replay.c)
 rv_set_plugin_properties(hively_playback)
 
 # hvl_replay uses libm (sin, pow) for square/filter table generation.
-target_link_libraries(hively_playback PRIVATE m)
+if(NOT WIN32)
+    target_link_libraries(hively_playback PRIVATE m)
+endif()
