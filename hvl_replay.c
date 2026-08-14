@@ -888,48 +888,6 @@ void hvl_process_stepfx_1( struct hvl_tune *ht, struct hvl_voice *voice, int32_t
   }
 }
 
-struct hvl_tune* hvl_load_tune( const char *name, uint32_t freq, uint32_t defstereo )
-{
-  uint8_t  *buf;
-  uint32_t  buflen;
-  FILE *fh;
-  struct hvl_tune *ht;
-
-  fh = fopen( name, "rb" );
-  if( !fh )
-  {
-    printf( "Can't open file: %s\n", name );
-    return NULL;
-  }
-
-  fseek( fh, 0, SEEK_END );
-  buflen = ftell( fh );
-  fseek( fh, 0, SEEK_SET );
-
-  buf = malloc( buflen );
-  if( !buf )
-  {
-    fclose( fh );
-    printf( "Out of memory!\n" );
-    return NULL;
-  }
-
-  if( fread( buf, 1, buflen, fh ) != buflen )
-  {
-    fclose( fh );
-    free( buf );
-    printf( "Unable to read from file!\n" );
-    return NULL;
-  }
-  fclose( fh );
-
-  ht = hvl_LoadTuneMemory(buf, buflen, freq, defstereo);
-  free( buf );
-  return ht;
-
-}
-
-
 void hvl_process_stepfx_2( struct hvl_tune *ht, struct hvl_voice *voice, int32_t FX, int32_t FXParam, int32_t *Note )
 {
   switch( FX )
