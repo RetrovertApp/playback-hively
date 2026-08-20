@@ -1,0 +1,9 @@
+[plugin]
+name = "hively"
+
+[data]
+entries = []
+
+[[fixtures]]
+file = "fixtures/sunspots.hvl"
+sha256 = "b154b9c74ed606e2625e663fb6221305da399e6ec905dd32e1f7f41bc652d4b6"

@@ -142,7 +142,8 @@ static RVReadInfo hively_read_data(void* user_data, RVReadData dest) {
     struct HivelyReplayerData* data = (struct HivelyReplayerData*)user_data;
 
     // Calculate how many S16 stereo frames fit in the output buffer
-    uint32_t max_frames = dest.channels_output_max_bytes_size / (sizeof(int16_t) * 2);
+    uint32_t capacity_frames = dest.channels_output_max_bytes_size / (sizeof(int16_t) * 2);
+    uint32_t max_frames = dest.info.frame_count < capacity_frames ? dest.info.frame_count : capacity_frames;
     int16_t* output = (int16_t*)dest.channels_output;
     uint32_t frames_written = 0;
     int reached_end = 0;
